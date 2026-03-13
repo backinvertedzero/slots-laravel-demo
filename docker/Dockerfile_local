@@ -1,0 +1,114 @@
+# Stage 1: Build environment
+FROM php:8.3.8-fpm-alpine AS builder
+
+# Set LD_PRELOAD for iconv compatibility
+ENV LD_PRELOAD=/usr/lib/preloadable_libiconv.so
+
+
+# Install system dependencies including build tools
+RUN apk add --update --no-cache \
+    curl \
+    freetype-dev \
+    libjpeg-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    libzip-dev \
+    oniguruma-dev \
+    icu-dev \
+    libxml2-dev \
+    openssl-dev \
+    git \
+    gnu-libiconv \
+    autoconf \
+    build-base \
+    pkgconfig \
+    linux-headers \
+    bash \
+    fcgi \
+    procps \
+    && docker-php-ext-install -j$(nproc) \
+            pdo \
+            pdo_mysql \
+            mysqli \
+            intl \
+            mbstring \
+            zip \
+            pcntl \
+            exif \
+            opcache \
+            bcmath \
+            gd \
+    && pecl install redis && docker-php-ext-enable redis
+
+
+# Stage 2: Composer
+FROM composer:latest as composer
+WORKDIR /app
+
+COPY ./composer.json /app/composer.json
+COPY ./composer.lock /app/composer.lock
+
+RUN composer install -n --ansi --no-scripts --no-progress --prefer-dist \
+    && composer dump-autoload --optimize --no-scripts
+
+
+# Stage 3: Application Image
+FROM php:8.3.8-fpm-alpine AS app
+RUN apk add --no-cache \
+    icu-libs \
+    libzip \
+    libpng \
+    libjpeg-turbo \
+    freetype \
+    libwebp \
+    oniguruma \
+    libxml2 \
+    openssl \
+    gnu-libiconv \
+    curl \
+    bash \
+    procps
+WORKDIR /app
+
+# Copy PHP extensions and libraries from the builder stage
+COPY --from=builder /usr/local/lib/ /usr/local/lib/
+COPY --from=builder /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+COPY --from=builder /usr/bin/ /usr/bin/
+COPY --from=builder /bin/ /bin/
+COPY --from=composer /app/vendor /app/vendor
+COPY --from=composer /app/composer.json /app/composer.json
+COPY --from=composer /app/composer.lock /app/composer.lock
+# maybe need
+#COPY --from=composer /usr/bin/composer /usr/local/bin/composer
+
+# Copy application code
+COPY . /app
+COPY ./docker/.env.local .env
+
+RUN mkdir -p /app/storage/logs \
+    /app/storage/framework/sessions \
+    /app/storage/framework/views \
+    /app/storage/framework/cache \
+    /app/bootstrap/cache \
+    && chown -R www-data:www-data /app/storage /app/bootstrap/cache \
+    && chmod -R 775 /app/storage /app/bootstrap/cache
+
+CMD ["php-fpm"]
+
+FROM nginx:1.29-alpine as nginx
+COPY --from=app /app /app
+
+
+# Copy custom Nginx configuration
+# -------------------------------------------------------a----
+# Replace the default Nginx configuration with our custom one
+# that is optimized for serving a Laravel application.
+# -----------------------------------------------------------
+COPY ./docker/nginx/nginx.conf /etc/nginx/nginx.conf
+
+# Set the working directory to the public folder
+WORKDIR /app/public
+
+
+CMD ["nginx", "-g", "daemon off;"]

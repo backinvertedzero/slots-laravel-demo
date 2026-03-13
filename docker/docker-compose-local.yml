@@ -1,0 +1,62 @@
+services:
+  # использовать подготовленный образ БД
+  mysql:
+    container_name: slots_mysql
+    image: mysql:8.0.40
+    restart: on-failure
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=slots
+      - MYSQL_USER=slots
+      - MYSQL_PASSWORD=slots
+    volumes:
+      - ./mysql/my.cnf:/etc/mysql/my.cnf
+    networks:
+      - internal
+    ports:
+      - 3310:3306
+
+  redis:
+    container_name: slots_redis
+    image: redis:7.2.1
+    restart: on-failure
+    networks:
+      - internal
+    labels:
+      - traefik.enable=false
+
+  app:
+    container_name: slots_app
+    image: slots_app:latest
+    restart: on-failure
+    networks:
+      - internal
+    depends_on:
+      - mysql
+      - redis
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile_local
+      target: app
+      args:
+        - ENV=local
+
+
+  nginx:
+    container_name: slots_nginx
+    build:
+      context: ../
+      dockerfile: ./docker/Dockerfile_local
+      target: nginx
+    restart: on-failure
+    ports:
+      - 8090:80
+    networks:
+      - internal
+    depends_on:
+      - app
+
+networks:
+  internal:
+  review:
+    external: true
